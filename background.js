@@ -48,12 +48,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 // Load saved links from local storage
-function loadSavedLinks() {
-  chrome.runtime.sendMessage({ action: 'getSavedLinks' }, (response) => {
+async function loadSavedLinks() {
+  try {
+    const response = await new Promise(resolve => {
+      chrome.runtime.sendMessage({ action: 'getSavedLinks' }, resolve);
+    });
     if (response?.savedLinks) {
+      await new Promise(resolve => {
+        chrome.storage.local.set({ savedLinks: response.savedLinks }, resolve);
+      });
       displayLinks(response.savedLinks);
     }
-  });
+  } catch (error) {
+    console.error('Error loading saved links:', error);
+  }
 }
 
 // Save a new link

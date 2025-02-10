@@ -349,8 +349,7 @@ function getCurrentTabUrl() {
       if (tabs[0]) {
         resolve(tabs[0].url);
       } else {
-        console.error("No active tab found");
-        resolve("");
+        reject(new Error("No active tab found"));
       }
     });
   });
@@ -801,12 +800,16 @@ function showMenu(button, linkId) {
   }
 
   // Close menu when clicking outside
-  document.addEventListener("click", function closeMenu(e) {
+  const closeMenu = (e) => {
     if (!menu.contains(e.target) && e.target !== button) {
       document.body.removeChild(menu);
       document.removeEventListener("click", closeMenu);
+      menu.querySelectorAll(".menu-item").forEach(item => {
+        item.removeEventListener("click", item.clickHandler);
+      });
     }
-  });
+  };
+  document.addEventListener("click", closeMenu);
 }
 
 function viewURL(linkId) {
@@ -1237,15 +1240,15 @@ function editURL(index) {
 
 function addTag() {
   const tagInput = document.getElementById("tagInput");
-  const tags = tagInput.value
-    .split(",")
-    .map((tag) => tag.trim())
-    .filter((tag) => tag);
+  const tags = new Set(
+    tagInput.value
+      .split(",")
+      .map(tag => tag.trim().toLowerCase())
+      .filter(tag => tag && tag.length <= 50)
+  );
 
   for (const tag of tags) {
-    if (!selectedTags.has(tag)) {
-      selectedTags.add(tag);
-    }
+    selectedTags.add(tag);
   }
 
   updateSelectedTagsDisplay();

@@ -1,3 +1,6 @@
+// Add missing constant at the top with other constants
+const API_BASE_URL = 'https://app.link2letter.com'; // Replace with actual API URL
+
 // Initialize saved links array
 const savedLinks = [];
 const allTags = new Set();
@@ -50,14 +53,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 // Load saved links from local storage
 async function loadSavedLinks() {
   try {
-    const response = await new Promise(resolve => {
-      chrome.runtime.sendMessage({ action: 'getSavedLinks' }, resolve);
+    const result = await new Promise(resolve => {
+      chrome.storage.local.get({ savedLinks: [] }, resolve);
     });
-    if (response?.savedLinks) {
-      await new Promise(resolve => {
-        chrome.storage.local.set({ savedLinks: response.savedLinks }, resolve);
-      });
-      displayLinks(response.savedLinks);
+    if (result.savedLinks) {
+      savedLinks.length = 0; // Clear existing array
+      savedLinks.push(...result.savedLinks);
     }
   } catch (error) {
     console.error('Error loading saved links:', error);
@@ -352,5 +353,12 @@ async function updateLink(linkData) {
 function getApiKey() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(['apiKey'], (result) => resolve(result.apiKey));
+  });
+}
+
+// Add missing helper function
+function storeApiKey(apiKey) {
+  return new Promise((resolve) => {
+    chrome.storage.sync.set({ apiKey }, resolve);
   });
 }

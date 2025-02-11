@@ -1,35 +1,67 @@
 // Constants
 const LINKS_PER_PAGE = 5;
 const SELECT_MODE_TEXT = { enable: "Cancel", disable: "Select" };
+const DEBUG = false;
 
 // Constants for API endpoints
-const API_BASE_URL =
-  "https://app.link2letter.com";
-const VALIDATE_ENDPOINT = `${API_BASE_URL}/api/feed-url`;
-const GET_LINKS_ENDPOINT = `${API_BASE_URL}/api/links`;
-const LINK_SUBMIT_ENDPOINT = `${API_BASE_URL}/api/links`;
-const LINK_DELETE_ENDPOINT = `${API_BASE_URL}/api/links`;
-const LINK_EDIT_ENDPOINT = `${API_BASE_URL}/api/links`;
+const API_BASE_URL = "https://app.link2letter.com";
+const API_ENDPOINTS = {
+  LINKS: `${API_BASE_URL}/api/links`,
+  PREFERENCES: `${API_BASE_URL}/api/preferences`,
+  FEED_URL: `${API_BASE_URL}/api/feed-url`,
+  SUBSCRIPTION: `${API_BASE_URL}/api/subscription`,
+  GENERATE_API_KEY: `${API_BASE_URL}/api/generate-api-key`
+};
+
+// Add pagination constants
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+
+// Add language support
+const SUPPORTED_LANGUAGES = ['en', 'es', 'fr', 'de', 'zh', 'ja', 'ko', 'pt', 'it'];
 
 // State
 let currentTab = "save";
-const currentPage = 1;
+let currentPage = 1;
 const selectedTags = new Set();
 const activeFilters = new Set();
 let currentEditId = null;
 let currentLinks = []; // Store the current list of links
 let hasShownPremiumPrompt = false;
 
+// Fix 1: Add missing variable declarations for form elements
+let urlInput;
+let titleInput;
+let descriptionInput;
+let notesInput;
+let tagsInput;
+let submitButton;
+let cancelEditButton;
+
 // Event Listeners
 document.addEventListener("DOMContentLoaded", init);
 
-function init() {
-  setupTabSwitching();
-  setupButtonListeners();
-  setupSortOrderDropdown();
-  loadInitialData();
-  loadRSSFeedURL();
-  updateSaveLinkButton();
+async function init() {
+  try {
+    // Initialize form elements
+    urlInput = document.getElementById('url');
+    titleInput = document.getElementById('title');
+    descriptionInput = document.getElementById('description');
+    notesInput = document.getElementById('notes');
+    tagsInput = document.getElementById('tagInput');
+    submitButton = document.getElementById('saveLink');
+    cancelEditButton = document.getElementById('cancelEdit');
+
+    setupTabSwitching();
+    setupButtonListeners();
+    setupSortOrderDropdown();
+    await loadInitialData();
+    await loadRSSFeedURL();
+    updateSaveLinkButton();
+  } catch (error) {
+    console.error('Initialization error:', error);
+    showMessage('Failed to initialize extension', 'error');
+  }
 }
 
 function setupTabSwitching() {
@@ -52,7 +84,13 @@ function setupTabSwitching() {
 }
 
 function setupButtonListeners() {
-  document.getElementById("saveLink").addEventListener("click", async () => {
+  const saveButton = document.getElementById("saveLink");
+  if (!saveButton) {
+    console.error('Save button not found');
+    return;
+  }
+
+  saveButton.addEventListener("click", async () => {
     let url = await getCurrentTabUrl();
     const removePaywall = document.getElementById("saveRemovePaywall").checked;
 
@@ -81,12 +119,9 @@ function setupButtonListeners() {
       });
 
       if (apiKey) {
-        const response = await fetch(LINK_SUBMIT_ENDPOINT, {
+        const response = await fetch(API_ENDPOINTS.LINKS, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-API-Key": apiKey,
-          },
+          headers: getApiHeaders(apiKey),
           body: JSON.stringify(linkData),
         });
 
@@ -119,6 +154,7 @@ function setupButtonListeners() {
       showMessage(error.message, "error");
     }
   });
+
   document
     .getElementById("selectText")
     .addEventListener("click", toggleSelectMode);
@@ -160,11 +196,9 @@ function setupButtonListeners() {
       const statusElement = document.getElementById("apiKeyStatus");
 
       try {
-        const response = await fetch(VALIDATE_ENDPOINT, {
+        const response = await fetch(API_ENDPOINTS.FEED_URL, {
           method: "GET",
-          headers: {
-            "X-API-Key": apiKey,
-          },
+          headers: getApiHeaders(apiKey),
         });
 
         if (response.ok) {
@@ -196,6 +230,12 @@ function setupButtonListeners() {
     e.preventDefault();
     chrome.tabs.create({ url: API_BASE_URL });
   });
+
+  // Add similar null checks for other elements
+  const selectText = document.getElementById("selectText");
+  if (selectText) {
+    selectText.addEventListener("click", toggleSelectMode);
+  }
 }
 
 function loadInitialData() {
@@ -205,47 +245,46 @@ function loadInitialData() {
   if (currentTab === "view") loadSavedLinks();
 }
 
-async function loadSavedLinks() {
+async function loadSavedLinks(page = 1, pageSize = DEFAULT_PAGE_SIZE, filters = {}) {
   try {
-    // Get API key
-    const apiKey = await new Promise((resolve) => {
-      chrome.storage.sync.get(["apiKey"], (result) => resolve(result.apiKey));
+    if (DEBUG) console.log('Starting loadSavedLinks...'); 
+    const apiKey = await getApiKey();
+    if (!apiKey) throw new Error('No API key found');
+
+    const queryParams = new URLSearchParams({
+      page,
+      pageSize,
+      ...(filters.tags && { tags: filters.tags.join(',') }),
+      ...(filters.search && { search: filters.search })
     });
 
-    if (apiKey) {
-      // Fetch links from server
-      const response = await fetch(GET_LINKS_ENDPOINT, {
-        method: "GET",
-        headers: {
-          "X-API-Key": apiKey,
-        },
-      });
+    if (DEBUG) console.log('Fetching from:', `${API_ENDPOINTS.LINKS}?${queryParams}`);
+    const response = await fetch(`${API_ENDPOINTS.LINKS}?${queryParams}`, {
+      headers: getApiHeaders(apiKey)
+    });
 
-      if (response.ok) {
-        const links = await response.json();
-        // Store links locally and display them
-        chrome.storage.local.set({ savedLinks: links }, () => {
-          currentLinks = links; // Store the links locally
-          displayLinks(links);
-          // Extract all unique tags from the links
-          const allTags = [
-            ...new Set(links.flatMap((link) => link.tags || [])),
-          ];
-          updateTagFilter(allTags);
-          updateSelectButtonVisibility(links.length);
-        });
-      } else {
-        console.error("Failed to fetch links from server");
-        // Fallback to local storage if API fails
-        fallbackToLocalStorage();
-      }
-    } else {
-      // No API key, use local storage
-      fallbackToLocalStorage();
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || 'Failed to fetch links');
     }
+
+    const data = await response.json();
+    if (DEBUG) console.log('Received data:', data);
+
+    const viewTab = document.getElementById('viewTab');
+    if (viewTab) {
+      viewTab.style.display = 'block';
+    }
+
+    displayLinks(data.links);
+    
+    if (data.pagination) {
+      updatePagination(data.pagination);
+    }
+    
   } catch (error) {
-    console.error("Error loading links:", error);
-    fallbackToLocalStorage();
+    console.error('Error loading links:', error);
+    showMessage(error.message, 'error');
   }
 }
 
@@ -268,16 +307,15 @@ function hasSavedLinks(callback) {
   chrome.storage.sync.get(["apiKey"], async (result) => {
     if (result.apiKey) {
       try {
-        const response = await fetch(GET_LINKS_ENDPOINT, {
+        const response = await fetch(API_ENDPOINTS.LINKS, {
           method: "GET",
-          headers: {
-            "X-API-Key": result.apiKey,
-          },
+          headers: getApiHeaders(result.apiKey),
         });
 
         if (response.ok) {
-          const links = await response.json();
-          callback(links && links.length > 0);
+          const data = await response.json();
+          // Check if data.links exists and has items
+          callback(data.links && data.links.length > 0);
           return;
         }
       } catch (error) {
@@ -287,6 +325,7 @@ function hasSavedLinks(callback) {
 
     // Fallback to local storage
     chrome.storage.local.get({ savedLinks: [] }, (result) => {
+      // Check the savedLinks array directly
       callback(result.savedLinks && result.savedLinks.length > 0);
     });
   });
@@ -392,33 +431,37 @@ function updateSelectButtonVisibility(linkCount) {
 }
 
 function displayLinks(savedLinks) {
+  if (DEBUG) console.log('displayLinks called with:', savedLinks);
+  
   const linksList = document.getElementById("savedLinks");
+  if (!linksList) {
+    if (DEBUG) console.error('Could not find element with ID "savedLinks"');
+    return;
+  }
+
   linksList.innerHTML = "";
 
-  // First filter the links
-  const filteredLinks = savedLinks.filter(
-    (link) =>
-      activeFilters.size === 0 ||
-      Array.from(activeFilters).every((tag) => link.tags.includes(tag))
-  );
+  if (!Array.isArray(savedLinks)) {
+    if (DEBUG) console.error('Expected links array, got:', savedLinks);
+    return;
+  }
 
-  // Sort links by createdAt date, newest first by default
-  const sortedLinks = [...filteredLinks].sort((a, b) => {
-    const sortOrder = document.getElementById("sortOrder").value;
-    const dateA = new Date(a.createdAt);
-    const dateB = new Date(b.createdAt);
-
-    return sortOrder === "oldest" ? dateA - dateB : dateB - dateA;
-  });
-
-  const linksToShow = paginateLinks(sortedLinks);
-
-  for (const link of linksToShow) {
+  if (DEBUG) console.log(`Creating ${savedLinks.length} link rows...`);
+  
+  for (const link of savedLinks) {
     const row = createLinkRow(link);
+    if (DEBUG) console.log('Created row:', row);
     linksList.appendChild(row);
   }
 
-  updatePagination(filteredLinks.length);
+  currentLinks = savedLinks;
+
+  const linksTable = document.getElementById('savedLinksTable');
+  if (linksTable) {
+    linksTable.style.display = 'table';
+  }
+
+  updateSelectButtonVisibility(savedLinks.length);
 }
 
 function paginateLinks(savedLinks) {
@@ -428,10 +471,16 @@ function paginateLinks(savedLinks) {
 }
 
 function createLinkRow(link) {
+  if (DEBUG) console.log('Creating row for link:', link);
+  
   const row = document.createElement("tr");
   row.innerHTML = `
     <td><input type="checkbox" data-link-id="${link.id}" style="display: none;"></td>
-    <td class="title-cell">${escapeHtml(link.title)}</td>
+    <td class="title-cell">
+      <a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer">
+        ${escapeHtml(link.title)}
+      </a>
+    </td>
     <td class="description-cell">${escapeHtml(link.description || '')}</td>
     <td class="tag-cell">${(link.tags || []).join(", ")}</td>
     <td>
@@ -477,14 +526,17 @@ function createLinkRow(link) {
             // Don't switch tab automatically
             const titleCell = row.querySelector(".title-cell");
             const descriptionCell = row.querySelector(".description-cell");
+            const tagCell = row.querySelector(".tag-cell");
 
             // Store original values
             row.dataset.originalTitle = titleCell.textContent;
             row.dataset.originalDescription = descriptionCell.textContent;
+            row.dataset.originalTags = tagCell.textContent;
 
             // Replace content with editable fields
             titleCell.innerHTML = `<input type="text" class="edit-title" value="${escapeHtml(titleCell.textContent)}">`;
             descriptionCell.innerHTML = `<textarea class="edit-description">${escapeHtml(descriptionCell.textContent)}</textarea>`;
+            tagCell.innerHTML = `<input type="text" class="edit-tags" value="${escapeHtml(link.tags ? link.tags.join(', ') : '')}">`;
 
             // Change menu button to save/cancel buttons
             menuBtn.style.display = 'none';
@@ -500,19 +552,21 @@ function createLinkRow(link) {
             actionButtons.querySelector('.save-edit-btn').onclick = async () => {
               const newTitle = row.querySelector('.edit-title').value;
               const newDescription = row.querySelector('.edit-description').value;
+              const newTags = row.querySelector('.edit-tags').value
+                .split(',')
+                .map(tag => tag.trim())
+                .filter(tag => tag.length > 0);
               
               try {
                 const apiKey = await getApiKey();
                 const response = await fetch(`${API_BASE_URL}/api/links/${linkId}`, {
                   method: 'PUT',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'X-API-Key': apiKey
-                  },
+                  headers: getApiHeaders(apiKey),
                   body: JSON.stringify({
                     ...link,
                     title: newTitle,
-                    description: newDescription
+                    description: newDescription,
+                    tags: newTags
                   })
                 });
 
@@ -525,6 +579,7 @@ function createLinkRow(link) {
                 // Restore original content on error
                 titleCell.textContent = row.dataset.originalTitle;
                 descriptionCell.textContent = row.dataset.originalDescription;
+                tagCell.textContent = row.dataset.originalTags;
               }
               
               // Restore menu button
@@ -535,6 +590,7 @@ function createLinkRow(link) {
             actionButtons.querySelector('.cancel-edit-btn').onclick = () => {
               titleCell.textContent = row.dataset.originalTitle;
               descriptionCell.textContent = row.dataset.originalDescription;
+              tagCell.textContent = row.dataset.originalTags;
               menuBtn.style.display = 'block';
               actionButtons.remove();
             };
@@ -546,9 +602,7 @@ function createLinkRow(link) {
               const apiKey = await getApiKey();
               const response = await fetch(`${API_BASE_URL}/api/links/${linkId}`, {
                 method: 'DELETE',
-                headers: {
-                  'X-API-Key': apiKey
-                }
+                headers: getApiHeaders(apiKey)
               });
 
               if (!response.ok) {
@@ -718,37 +772,36 @@ function handleDeleteResponse(response) {
   }
 }
 
-function updatePagination(totalLinks) {
-  const totalPages = Math.ceil(totalLinks / LINKS_PER_PAGE);
-  let paginationHtml = "";
+function updatePagination(pagination) {
+  const paginationElement = document.getElementById('pagination');
+  if (!pagination) return;
+
+  const { total, page, pageSize, totalPages } = pagination;
+  let html = '';
 
   if (totalPages > 1) {
-    paginationHtml += createPaginationButton(
-      Math.max(1, currentPage - 1),
-      "&laquo;"
-    );
+    // Previous page
+    html += `<button ${page === 1 ? 'disabled' : ''} 
+      onclick="changePage(${page - 1})">&laquo;</button>`;
+
+    // Page numbers
     for (let i = 1; i <= totalPages; i++) {
-      paginationHtml += createPaginationButton(i, i, i === currentPage);
+      html += `<button ${i === page ? 'class="active"' : ''} 
+        onclick="changePage(${i})">${i}</button>`;
     }
-    paginationHtml += createPaginationButton(
-      Math.min(totalPages, currentPage + 1),
-      "&raquo;"
-    );
+
+    // Next page
+    html += `<button ${page === totalPages ? 'disabled' : ''} 
+      onclick="changePage(${page + 1})">&raquo;</button>`;
   }
 
-  document.getElementById("pagination").innerHTML = paginationHtml;
+  paginationElement.innerHTML = html;
 }
 
-function createPaginationButton(page, text, disabled = false) {
-  return `<button onclick="changePage(${page})" ${
-    disabled ? "disabled" : ""
-  }>${text}</button>`;
-}
-
-function changePage(newPage) {
-  const currentPage = newPage;
-  loadSavedLinks();
-}
+window.changePage = (newPage) => {
+  currentPage = newPage;
+  loadSavedLinks(currentPage);
+};
 
 function showMenu(button, linkId) {
   // If linkId is not passed directly, get it from the button's data attribute
@@ -804,9 +857,9 @@ function showMenu(button, linkId) {
     if (!menu.contains(e.target) && e.target !== button) {
       document.body.removeChild(menu);
       document.removeEventListener("click", closeMenu);
-      menu.querySelectorAll(".menu-item").forEach(item => {
+      for (const item of menu.querySelectorAll(".menu-item")) {
         item.removeEventListener("click", item.clickHandler);
-      });
+      }
     }
   };
   document.addEventListener("click", closeMenu);
@@ -891,12 +944,9 @@ function viewURL(linkId) {
 
           if (apiKey && link.id) {
             // Update in API first
-            const response = await fetch(`${LINK_EDIT_ENDPOINT}/${link.id}`, {
+            const response = await fetch(`${API_BASE_URL}/api/links/${link.id}`, {
               method: "PUT",
-              headers: {
-                "Content-Type": "application/json",
-                "X-API-Key": apiKey,
-              },
+              headers: getApiHeaders(apiKey),
               body: JSON.stringify(updatedLink),
             });
 
@@ -1031,7 +1081,6 @@ function editRSSItem(linkId) {
       return;
     }
 
-    // Find the row using a more reliable selector
     const menuButton = document.querySelector(`button[data-link-id="${linkId}"]`);
     if (!menuButton) {
       console.error("Menu button not found for link ID:", linkId);
@@ -1045,19 +1094,18 @@ function editRSSItem(linkId) {
 
     const titleCell = row.querySelector(".title-cell");
     const descriptionCell = row.querySelector(".description-cell");
+    const tagCell = row.querySelector(".tag-cell");
 
     // Store original values and link ID
     row.dataset.originalTitle = titleCell.textContent;
     row.dataset.originalDescription = descriptionCell.textContent;
+    row.dataset.originalTags = tagCell.textContent;
     row.dataset.linkId = linkId;
 
     // Replace content with editable fields
-    titleCell.innerHTML = `<input type="text" class="edit-title" value="${escapeHtml(
-      titleCell.textContent
-    )}">`;
-    descriptionCell.innerHTML = `<textarea class="edit-description">${escapeHtml(
-      descriptionCell.textContent
-    )}</textarea>`;
+    titleCell.innerHTML = `<input type="text" class="edit-title" value="${escapeHtml(titleCell.textContent)}">`;
+    descriptionCell.innerHTML = `<textarea class="edit-description">${escapeHtml(descriptionCell.textContent)}</textarea>`;
+    tagCell.innerHTML = `<input type="text" class="edit-tags" value="${escapeHtml(link.tags ? link.tags.join(', ') : '')}">`;
 
     // Change menu button to save button
     menuButton.textContent = "Save";
@@ -1071,6 +1119,7 @@ function editRSSItem(linkId) {
     cancelButton.onclick = () => {
       titleCell.textContent = row.dataset.originalTitle;
       descriptionCell.textContent = row.dataset.originalDescription;
+      tagCell.textContent = row.dataset.originalTags;
       restoreMenuButton();
     };
     menuButton.parentNode.insertBefore(cancelButton, menuButton);
@@ -1095,68 +1144,13 @@ function editRSSItem(linkId) {
   });
 }
 
-async function deleteLink(linkId) {
-  try {
-    // Get the link and API key
-    const [currentLink, apiKey] = await Promise.all([
-      new Promise((resolve) => {
-        chrome.storage.local.get({ savedLinks: [] }, (result) => {
-          resolve(result.savedLinks.find(l => l.id === linkId));
-        });
-      }),
-      new Promise((resolve) => {
-        chrome.storage.sync.get(["apiKey"], (result) => resolve(result.apiKey));
-      }),
-    ]);
-
-    if (!currentLink) {
-      throw new Error("Link not found");
-    }
-
-    if (apiKey && currentLink.id) {
-      // Delete from API first
-      const response = await fetch(
-        `${LINK_DELETE_ENDPOINT}/${currentLink.id}`,
-        {
-          method: "DELETE",
-          headers: {
-            "X-API-Key": apiKey,
-          },
-        }
-      );
-
-      // Check for successful deletion (204) or not found (404)
-      if (response.status !== 204 && response.status !== 404) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || "Failed to delete link from server");
-      }
-    }
-
-    // Delete from local storage
-    chrome.storage.local.get({ savedLinks: [] }, (result) => {
-      const savedLinks = result.savedLinks;
-      savedLinks.splice(savedLinks.findIndex(l => l.id === linkId), 1);
-      chrome.storage.local.set({ savedLinks }, () => {
-        loadSavedLinks(); // Reload the list
-        showMessage("Link deleted successfully!");
-      });
-    });
-  } catch (error) {
-    console.error("Error deleting link:", error);
-    showMessage(error.message, "error");
-  }
-}
-
-// Update the confirmDelete function to be async
-async function confirmDelete(index) {
-  if (confirm("Are you sure you want to delete this link?")) {
-    await deleteLink(index);
-  }
-}
-
 async function saveRSSItemChanges(linkId, row) {
   const newTitle = row.querySelector(".edit-title").value.trim();
   const newDescription = row.querySelector(".edit-description").value.trim();
+  const newTags = row.querySelector(".edit-tags").value
+    .split(',')
+    .map(tag => tag.trim())
+    .filter(tag => tag.length > 0);
 
   if (!newTitle) {
     showMessage("Title cannot be empty", "error");
@@ -1188,16 +1182,13 @@ async function saveRSSItemChanges(linkId, row) {
       title: newTitle,
       description: newDescription || null,
       notes: currentLink.notes || null,
-      tags: Array.isArray(currentLink.tags) ? currentLink.tags : [],
+      tags: newTags,
     };
 
     if (apiKey) {
-      const response = await fetch(`${LINK_EDIT_ENDPOINT}/${linkId}`, {
+      const response = await fetch(`${API_BASE_URL}/api/links/${linkId}`, {
         method: "PUT",
-        headers: {
-          "Content-Type": "application/json",
-          "X-API-Key": apiKey,
-        },
+        headers: getApiHeaders(apiKey),
         body: JSON.stringify(updatedLink),
       });
 
@@ -1330,11 +1321,9 @@ function loadRSSFeedURL() {
   chrome.storage.sync.get(["apiKey"], async (result) => {
     if (result.apiKey) {
       try {
-        const response = await fetch(VALIDATE_ENDPOINT, {
+        const response = await fetch(API_ENDPOINTS.FEED_URL, {
           method: "GET",
-          headers: {
-            "X-API-Key": result.apiKey,
-          },
+          headers: getApiHeaders(result.apiKey),
         });
 
         if (response.ok) {
@@ -1389,10 +1378,7 @@ async function updateRSSFeed() {
   try {
     const response = await fetch(`${API_BASE_URL}/refresh-feed`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: getApiHeaders(apiKey),
     });
 
     if (!response.ok) {
@@ -1451,18 +1437,26 @@ function setupSortOrderDropdown() {
   sortOrder.value = "newest"; // Set default value to newest
 }
 
-// Update error handling in the submit handler
+// Fix 2: Update handleSubmit to handle missing URL input
 async function handleSubmit(event) {
   event.preventDefault();
   
   try {
+    // Get URL from current tab if URL input is not present
+    const url = urlInput ? urlInput.value.trim() : await getCurrentTabUrl();
+    
     const linkData = {
-      url: urlInput.value.trim(),
+      url,
       title: titleInput.value.trim(),
       description: descriptionInput.value.trim() || null,
       notes: notesInput.value.trim() || null,
       tags: tagsInput.value ? tagsInput.value.split(',').map(tag => tag.trim()).filter(tag => tag) : []
     };
+
+    // Validate required fields
+    if (!linkData.url || !linkData.title) {
+      throw new Error('URL and title are required');
+    }
 
     let result;
     if (currentEditId) {
@@ -1488,10 +1482,10 @@ async function handleSubmit(event) {
     }
 
     await loadSavedLinks();
-    showSuccess(currentEditId ? 'Link updated successfully!' : 'Link saved successfully!');
+    showMessage(currentEditId ? 'Link updated successfully!' : 'Link saved successfully!');
     resetForm();
   } catch (error) {
-    showError(error.message || 'Failed to save link');
+    showMessage(error.message || 'Failed to save link', 'error');
   }
 }
 
@@ -1508,10 +1502,10 @@ function setEditMode(linkId) {
   const notesInput = document.getElementById('notes');
   const saveLinkButton = document.getElementById('saveLink');
 
-  // Set values
-  titleInput.value = link.title;
-  descriptionInput.value = link.description || '';
-  notesInput.value = link.notes || '';
+  // Set values and trim whitespace
+  titleInput.value = (link.title || '').trim();
+  descriptionInput.value = (link.description || '').trim();
+  notesInput.value = (link.notes || '').trim();
   
   // Update tags
   selectedTags.clear();
@@ -1527,40 +1521,34 @@ function setEditMode(linkId) {
   saveLinkButton.textContent = 'Update Link';
 }
 
+// Fix 3: Update resetForm to handle potentially missing elements
 function resetForm() {
   currentEditId = null;
-  urlInput.value = '';
-  titleInput.value = '';
-  descriptionInput.value = '';
-  notesInput.value = '';
-  tagsInput.value = '';
+  if (urlInput) urlInput.value = '';
+  if (titleInput) titleInput.value = '';
+  if (descriptionInput) descriptionInput.value = '';
+  if (notesInput) notesInput.value = '';
+  if (tagsInput) tagsInput.value = '';
   
-  submitButton.textContent = 'Save Link';
-  cancelEditButton.style.display = 'none';
+  if (submitButton) submitButton.textContent = 'Save Link';
+  if (cancelEditButton) cancelEditButton.style.display = 'none';
 }
 
-// Add cancel edit handler
-function handleCancelEdit() {
-  resetForm();
-}
-
-// Initialize the popup
-document.addEventListener('DOMContentLoaded', async () => {
-  // ... existing initialization code ...
-  
-  cancelEditButton.addEventListener('click', handleCancelEdit);
-  await loadSavedLinks(); // Load links when popup opens
-});
-
-// Add new functions to handle the premium tab
+// Fix 4: Add null check for premium tab elements
 function showPremiumTab() {
+  const premiumTab = document.getElementById('premiumTab');
+  if (!premiumTab) {
+    console.error('Premium tab element not found');
+    return;
+  }
+
   // Hide all other tabs
   for (const tab of document.querySelectorAll('.tab-content')) {
     tab.classList.remove('active-content');
   }
   
   // Show premium tab
-  document.getElementById('premiumTab').classList.add('active-content');
+  premiumTab.classList.add('active-content');
 }
 
 // Add event listener for dismiss button
@@ -1568,3 +1556,79 @@ document.getElementById('dismissPremium').addEventListener('click', () => {
   document.getElementById('premiumTab').classList.remove('active-content');
   document.getElementById('saveTab').classList.add('active-content');
 });
+
+// Add user preferences support
+async function loadUserPreferences() {
+  try {
+    const apiKey = await getApiKey();
+    if (!apiKey) return;
+
+    const response = await fetch(API_ENDPOINTS.PREFERENCES, {
+      headers: getApiHeaders(apiKey)
+    });
+
+    if (response.ok) {
+      const preferences = await response.json();
+      applyUserPreferences(preferences);
+    }
+  } catch (error) {
+    console.error('Error loading preferences:', error);
+  }
+}
+
+function applyUserPreferences(preferences) {
+  // Apply theme
+  document.body.setAttribute('data-theme', preferences.theme);
+  
+  // Apply language
+  if (preferences.language) {
+    document.documentElement.lang = preferences.language;
+  }
+}
+
+// Add subscription status check
+async function checkSubscriptionStatus() {
+  try {
+    const apiKey = await getApiKey();
+    if (!apiKey) return;
+
+    const response = await fetch(API_ENDPOINTS.SUBSCRIPTION, {
+      headers: getApiHeaders(apiKey)
+    });
+
+    if (response.ok) {
+      const subscriptionInfo = await response.json();
+      updateUIBasedOnSubscription(subscriptionInfo);
+    }
+  } catch (error) {
+    console.error('Error checking subscription:', error);
+  }
+}
+
+function updateUIBasedOnSubscription(subscriptionInfo) {
+  const { tier, linkLimit, currentLinks } = subscriptionInfo;
+  
+  // Update link counter
+  document.getElementById('linkCounter').textContent = 
+    `${currentLinks} / ${linkLimit} links used`;
+    
+  // Show/hide premium features
+  const premiumFeatures = document.querySelectorAll('.premium-feature');
+  for (const feature of premiumFeatures) {
+    feature.style.display = tier === 'paid' ? 'block' : 'none';
+  }
+}
+
+function getUserLanguage() {
+  return document.documentElement.lang || 'en';
+}
+
+// Add a helper function to get standard headers
+function getApiHeaders(apiKey) {
+  return {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "X-API-Key": apiKey,
+    "Accept-Language": getUserLanguage()
+  };
+}

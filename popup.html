@@ -16,7 +16,7 @@
         <div class="tab active-tab" data-tab="save">Save a Page</div>
         <div class="tab" data-tab="view">My Links</div>
         <a href="#" id="accountLink" class="tab">Account</a>
-        <div class="tab" data-tab="settings"><img src="gear.png" alt="Settings" style="width: 20px; height: 20px;">
+        <div class="tab" data-tab="settings"><img src="gear.png" alt="Settings" style="width: 20px; height: 20px;" onerror="this.src='default-gear.png'">
         </div>
       </div>
     </div>
@@ -94,7 +94,7 @@
         <div id="apiKeySection">
           <div id="apiKeyEntry">
             <p><strong>API Key: </strong>
-              <input type="text" id="apiKey" placeholder="Enter your API key">
+              <input type="text" id="apiKey" placeholder="Enter your API key" autocomplete="off" spellcheck="false" aria-label="API Key">
               <button id="validateApiKey">Validate</button>
           </div>
           <button id="editApiKey" style="display: none;">Edit</button>

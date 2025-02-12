@@ -10,14 +10,12 @@
   <div class="container">
     <div class="header">
       <div class="logo-and-title">
-        <span class="title">Link2Letter</span>
+        <span class="title"><a href="https://app.link2letter.com" target="_blank" rel="noopener noreferrer">Link2Letter</a></span>
       </div>
       <div class="tabs-and-title">
         <div class="tab active-tab" data-tab="save">Save a Page</div>
         <div class="tab" data-tab="view">My Links</div>
-        <a href="#" id="accountLink" class="tab">Account</a>
-        <div class="tab" data-tab="settings"><img src="gear.png" alt="Settings" style="width: 20px; height: 20px;" onerror="this.src='default-gear.png'">
-        </div>
+        <div class="tab" data-tab="settings">Settings</div>
       </div>
     </div>
 
@@ -116,14 +114,14 @@
             <div class="pricing-card">
               <h3>Monthly</h3>
               <p class="price">$9.99<span>/month</span></p>
-              <button onclick="window.open('https://app.link2letter.com/billing?plan=monthly')" class="upgrade-btn">Choose Monthly</button>
+              <button onclick="window.open('https://app.link2letter.com/billing')" class="upgrade-btn">Choose Monthly</button>
             </div>
             <div class="pricing-card best-value">
               <div class="best-value-tag">Best Value</div>
               <h3>Annual</h3>
               <p class="price">$99.99<span>/year</span></p>
               <p class="savings">Save 17%</p>
-              <button onclick="window.open('https://app.link2letter.com/billing?plan=annual')" class="upgrade-btn">Choose Annual</button>
+              <button onclick="window.open('https://app.link2letter.com/billing')" class="upgrade-btn">Choose Annual</button>
             </div>
           </div>
           <button id="dismissPremium" class="dismiss-btn">Maybe Later</button>
@@ -133,7 +131,7 @@
       <div id="message"></div>
     </div>
   </div>
-  <script src="popup.js"></script>
+  <script src="popup.js" type="module"></script>
 </body>
 
 </html>

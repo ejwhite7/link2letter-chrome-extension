@@ -1,5 +1,5 @@
 // Add missing constant at the top with other constants
-const API_BASE_URL = 'https://app.link2letter.com'; // Replace with actual API URL
+const API_BASE_URL = CONFIG.API_BASE_URL; // Replace with actual API URL
 
 // Initialize saved links array
 const savedLinks = [];
@@ -220,14 +220,18 @@ async function checkSubscriptionStatus() {
       }
     });
 
-    const data = await response.json();
-    
     if (!response.ok) {
-      throw new Error(data.error || 'Failed to get subscription info');
+      const data = await response.json().catch(() => ({ error: 'Network response was not ok' }));
+      throw new Error(data.error || `HTTP error! status: ${response.status}`);
     }
 
+    const data = await response.json();
     return data;
   } catch (error) {
+    if (error instanceof TypeError) {
+      console.error('Network error checking subscription:', error);
+      throw new Error('Network error - please check your connection');
+    }
     console.error('Error checking subscription:', error);
     throw error;
   }
@@ -254,8 +258,8 @@ async function generateNewApiKey() {
   }
 }
 
-// Rename the async function
-async function updateLinkAPI(linkData) {
+// Update API key generation function
+async function updateLink(linkData) {
   try {
     const apiKey = await getApiKey();
     if (!apiKey) throw new Error('No API key found');
@@ -315,40 +319,6 @@ async function getLinks() {
     throw error;
   }
 }
-
-async function updateLink(linkData) {
-  try {
-    const apiKey = await getApiKey();
-    if (!apiKey) throw new Error('No API key found');
-
-    const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.links}/${linkData.id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey
-      },
-      body: JSON.stringify({
-        url: linkData.url,
-        title: linkData.title,
-        description: linkData.description,
-        notes: linkData.notes,
-        tags: linkData.tags
-      })
-    });
-
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error || 'Failed to update link');
-    }
-
-    return data;
-  } catch (error) {
-    console.error('Error updating link:', error);
-    throw error;
-  }
-}
-
 // Helper function to get API key from storage
 function getApiKey() {
   return new Promise((resolve) => {

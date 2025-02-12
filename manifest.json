@@ -36,5 +36,9 @@
       "matches": ["<all_urls>"],
       "js": ["content.js"]
     }
-  ]
+  ],
+  "web_accessible_resources": [{
+    "resources": ["init.js", "config.js"],
+    "matches": ["<all_urls>"]
+  }]
 }

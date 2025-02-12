@@ -613,3 +613,57 @@ a:hover {
   font-size: 10px;
   font-weight: 500;
 }
+
+#savedLinksTable {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+}
+
+#savedLinksTable th,
+#savedLinksTable td {
+  padding: 8px;
+  text-align: left;
+  border-bottom: 1px solid #ddd;
+}
+
+#savedLinksTable th {
+  background-color: #f8f9fa;
+  font-weight: 600;
+}
+
+.menu-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.menu-btn:hover {
+  background-color: #f0f0f0;
+}
+
+.menu-actions {
+  position: absolute;
+  background: white;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  z-index: 1000;
+}
+
+.action-btn {
+  display: block;
+  width: 100%;
+  padding: 8px 16px;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+.action-btn:hover {
+  background-color: #f0f0f0;
+}

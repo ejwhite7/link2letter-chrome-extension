@@ -159,6 +159,8 @@ export const apiClient = {
   },
 
   async updateLink(apiKey, linkId, linkData) {
+    console.log('Updating link:', linkId, 'with data:', linkData);
+    
     const response = await fetch(`${CONFIG.API_BASE_URL}/api/links/${linkId}`, {
       method: 'PATCH',
       headers: {
@@ -173,7 +175,15 @@ export const apiClient = {
       throw new ApiError(error.message || 'Failed to update link', response.status);
     }
 
-    return response.json();
+    const data = await response.json();
+    console.log('Update link response:', data);
+    
+    // Handle nested response structure
+    if (data.success && data.data) {
+      return data.data;
+    }
+    
+    return data;
   },
 
   async deleteLink(apiKey, linkId) {
@@ -207,6 +217,8 @@ export const apiClient = {
   },
 
   async bulkDeleteLinks(apiKey, linkIds) {
+    console.log('Bulk deleting links:', linkIds);
+    
     const response = await fetch(`${CONFIG.API_BASE_URL}/api/links/batch`, {
       method: 'DELETE',
       headers: {
@@ -217,10 +229,23 @@ export const apiClient = {
     });
 
     if (!response.ok) {
-      throw new ApiError('Failed to delete links', response.status);
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      console.error('Bulk delete error:', errorData);
+      throw new ApiError(
+        errorData.error || errorData.message || 'Failed to delete links', 
+        response.status
+      );
     }
 
-    return response.json();
+    const data = await response.json();
+    console.log('Bulk delete response:', data);
+    
+    // Handle nested response structure
+    if (data.success && data.data) {
+      return data.data;
+    }
+    
+    return data;
   },
 
   async getUserInfo(apiKey) {

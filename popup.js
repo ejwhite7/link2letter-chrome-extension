@@ -777,23 +777,39 @@ async function deleteSelectedLinks() {
       '#savedLinksTable input[type="checkbox"]:checked'
     );
     
+    console.log('Found checkboxes:', checkboxes.length);
+    
     for (const checkbox of checkboxes) {
       const linkId = Number.parseInt(checkbox.dataset.linkId);
+      console.log('Checkbox linkId:', checkbox.dataset.linkId, 'Parsed:', linkId);
       if (linkId) selectedIds.push(linkId);
     }
 
-    if (selectedIds.length === 0) return;
+    console.log('Selected IDs for deletion:', selectedIds);
+    
+    if (selectedIds.length === 0) {
+      console.log('No links selected for deletion');
+      return;
+    }
 
     const apiKey = await apiClient.getApiKey();
     if (!apiKey) throw new Error('No API key found');
 
+    console.log('Calling bulkDeleteLinks with IDs:', selectedIds);
     await apiClient.bulkDeleteLinks(apiKey, selectedIds);
+    
     showMessage('Links deleted successfully', 'success');
     await loadSavedLinks();
     toggleSelectMode(); // Exit select mode
   } catch (error) {
     console.error('Error deleting links:', error);
-    showMessage('Failed to delete links. Please try again.', 'error');
+    console.error('Error details:', {
+      message: error.message,
+      status: error.status,
+      code: error.code,
+      stack: error.stack
+    });
+    showMessage(error.message || 'Failed to delete links. Please try again.', 'error');
   }
 }
 
@@ -1059,8 +1075,12 @@ function editRSSItem(linkId) {
     row.dataset.linkId = linkId;
 
     // Replace content with editable fields
-    titleCell.innerHTML = `<input type="text" class="edit-title" value="${escapeHtml(titleCell.textContent)}">`;
-    descriptionCell.innerHTML = `<textarea class="edit-description">${escapeHtml(descriptionCell.textContent)}</textarea>`;
+    const titleLink = titleCell.querySelector('a');
+    const actualTitle = titleLink ? titleLink.textContent.trim() : link.title;
+    const actualDescription = link.description || '';
+    
+    titleCell.innerHTML = `<input type="text" class="edit-title" value="${escapeHtml(actualTitle)}">`;
+    descriptionCell.innerHTML = `<textarea class="edit-description">${escapeHtml(actualDescription)}</textarea>`;
     tagCell.innerHTML = `<input type="text" class="edit-tags" value="${escapeHtml(link.tags ? link.tags.join(', ') : '')}">`;
 
     // Change menu button to save button
@@ -1139,6 +1159,8 @@ function restoreRow(row, link) {
 }
 
 async function saveRSSItemChanges(linkId, row) {
+  console.log('saveRSSItemChanges called with linkId:', linkId);
+  
   if (!linkId || !row) {
     showMessage('Invalid link data', 'error');
     return;
@@ -1150,6 +1172,8 @@ async function saveRSSItemChanges(linkId, row) {
     ?.split(',')
     ?.map(tag => tag.trim())
     ?.filter(tag => tag.length > 0) || [];
+
+  console.log('Edit values:', { newTitle, newDescription, newTags });
 
   if (!newTitle) {
     showMessage("Title cannot be empty", "error");
@@ -1172,7 +1196,9 @@ async function saveRSSItemChanges(linkId, row) {
       tags: newTags,
     };
 
+    console.log('Sending update payload:', updatePayload);
     const savedLink = await apiClient.updateLink(apiKey, linkId, updatePayload);
+    console.log('API response:', savedLink);
     
     // Merge the response with the original link to preserve URL and other fields
     const mergedLink = {
@@ -1180,6 +1206,8 @@ async function saveRSSItemChanges(linkId, row) {
       ...savedLink,
       url: link.url // Ensure URL is preserved from original link
     };
+    
+    console.log('Merged link:', mergedLink);
     
     // Update local state
     const linkIndex = currentLinks.findIndex(l => l.id === linkId);

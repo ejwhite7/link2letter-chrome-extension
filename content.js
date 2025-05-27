@@ -1,4 +1,8 @@
+console.log('[Link2Letter Content Script] Loaded on:', window.location.href);
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('[Link2Letter Content Script] Received message:', request);
+  
   if (request.action === "getPageInfo") {
     try {
       const pageInfo = {
@@ -6,9 +10,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         title: document.title,
         description: getMetaContent('description') || getMetaContent('og:description') || ''
       };
+      console.log('[Link2Letter Content Script] Sending page info:', pageInfo);
       sendResponse(pageInfo);
     } catch (error) {
-      console.error('Error getting page info:', error);
+      console.error('[Link2Letter Content Script] Error getting page info:', error);
       sendResponse({ error: error.message });
     }
   }
@@ -17,5 +22,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 function getMetaContent(name) {
   const meta = document.querySelector(`meta[name="${name}"], meta[property="${name}"]`);
-  return meta ? meta.getAttribute('content') : null;
+  const content = meta ? meta.getAttribute('content') : null;
+  console.log(`[Link2Letter Content Script] Meta ${name}:`, content);
+  return content;
 }

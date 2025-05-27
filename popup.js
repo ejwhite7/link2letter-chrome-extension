@@ -1,14 +1,9 @@
 import { CONFIG } from './config.js';
-const LINKS_PER_PAGE = 5;
-const SELECT_MODE_TEXT = { enable: "Cancel", disable: "Select" };
-const DEBUG = false;
+import { apiClient, ApiError } from './api-client.js';
 
-const API_ENDPOINTS = {
-  API_KEY: `${CONFIG.API_BASE_URL}/api/generate-api-key`,
-  FEED_URL: `${CONFIG.API_BASE_URL}/api/validate-api-key`,
-  SUBSCRIPTION: `${CONFIG.API_BASE_URL}/api/subscription`,
-  LINKS: `${CONFIG.API_BASE_URL}/api/links`
-};
+const LINKS_PER_PAGE = 20;
+const SELECT_MODE_TEXT = { enable: "Cancel", disable: "Select" };
+const DEBUG = CONFIG.DEBUG;
 
 // Add pagination constants
 const DEFAULT_PAGE_SIZE = 20;
@@ -89,7 +84,7 @@ async function init() {
     ]);
 
     // Load saved API key
-    const apiKey = await getApiKey();
+    const apiKey = await apiClient.getApiKey();
     if (apiKey) {
       elements.apiKeyInput.value = apiKey;
       elements.apiKeyStatus.textContent = 'API key validated';
@@ -177,7 +172,16 @@ async function handleSave(event) {
     resetForm();
   } catch (error) {
     console.error('Error saving link:', error);
-    showMessage(error.message || 'Failed to save link', 'error');
+    if (error instanceof ApiError) {
+      if (error.code === 'LINK_LIMIT_REACHED' && !hasShownPremiumPrompt) {
+        hasShownPremiumPrompt = true;
+        showPremiumTab();
+      } else {
+        showMessage(error.message, 'error');
+      }
+    } else {
+      showMessage(error.message || 'Failed to save link', 'error');
+    }
   }
 }
 
@@ -219,15 +223,21 @@ function setupButtonListeners() {
   safeAddListener('validateApiKey', 'click', validateApiKey);
 }
 
-function loadInitialData() {
+async function loadInitialData() {
   loadCurrentPageInfo();
-  loadSavedLinks();
-  loadRSSFeedURL();
-  if (currentTab === "view") loadSavedLinks();
+  
+  // Only load saved links and RSS feed URL if we have an API key
+  const apiKey = await apiClient.getApiKey();
+  if (apiKey) {
+    loadSavedLinks();
+    loadRSSFeedURL();
+  }
 }
 
-async function loadSavedLinks(page = 1, pageSize = DEFAULT_PAGE_SIZE, filters = {}) {
+async function loadSavedLinks(page = 1, pageSize = LINKS_PER_PAGE, filters = {}) {
   let controller;
+  
+  if (DEBUG) console.log('loadSavedLinks called with:', { page, pageSize, filters });
   
   try {
     // Cancel any ongoing request
@@ -238,51 +248,50 @@ async function loadSavedLinks(page = 1, pageSize = DEFAULT_PAGE_SIZE, filters = 
     controller = new AbortController();
     currentLoadLinksRequest = controller;
 
-    const apiKey = await getApiKey();
+    const apiKey = await apiClient.getApiKey();
     if (!apiKey) {
+      if (DEBUG) console.log('No API key found');
       throw new Error('No API key found');
     }
 
-    const queryParams = new URLSearchParams({
+    const params = {
       page,
-      pageSize,
-      ...(filters.tags && { tags: filters.tags.join(',') }),
+      limit: pageSize,
+      ...(filters.tags && { tags: Array.from(activeFilters) }),
       ...(filters.search && { search: filters.search })
-    });
+    };
 
-    const url = `${API_ENDPOINTS.LINKS}?${queryParams}`;
-    console.log('Fetching links from:', url);
-    console.log('Using API key:', apiKey ? 'Present' : 'Missing');
-
-    const response = await fetch(url, {
-      headers: {
-        'X-API-Key': apiKey
-      },
-      signal: controller.signal
-    });
-
-    console.log('Response status:', response.status);
-    const data = await response.json();
-    console.log('Response data:', data);
+    if (DEBUG) console.log('Fetching links with params:', params);
+    const links = await apiClient.getLinks(apiKey, params);
     
-    // Check if data has the expected structure
-    if (!data || (!Array.isArray(data) && !Array.isArray(data.links))) {
-      throw new Error('Invalid data format received');
-    }
-
-    // Use data.links if it exists, otherwise use data directly
-    const links = Array.isArray(data) ? data : data.links;
-    displayLinks(links); // Use displayLinks instead of updateLinksDisplay
+    if (DEBUG) console.log('Received links:', links);
+    currentLinks = links;
+    displayLinks(links);
+    
+    // Update tags filter with all unique tags
+    const allTags = [...new Set(links.flatMap(link => link.tags || []))];
+    updateTagFilter(allTags);
+    updateSelectButtonVisibility(links.length);
+    
   } catch (error) {
     if (error.name === 'AbortError') return;
+    
+    console.error('Error loading links:', error);
+    console.error('Error details:', {
+      message: error.message,
+      status: error.status,
+      code: error.code,
+      stack: error.stack
+    });
     
     if (error.message === 'No API key found') {
       showMessage('Please add your API key in the Settings tab', 'error');
       switchTab('settings');
+    } else if (error.message.includes('Invalid response format')) {
+      showMessage('Server returned invalid response. Please check your API key.', 'error');
     } else {
       showMessage(error.message || 'Failed to load links', 'error');
     }
-    console.error('Error loading links:', error);
   } finally {
     if (currentLoadLinksRequest === controller) {
       currentLoadLinksRequest = null;
@@ -305,21 +314,14 @@ function fallbackToLocalStorage() {
 }
 
 // Update hasSavedLinks to check both API and local storage
-function hasSavedLinks(callback) {
-  chrome.storage.sync.get(["apiKey"], async (result) => {
-    if (result.apiKey) {
+async function hasSavedLinks(callback) {
+  try {
+    const apiKey = await apiClient.getApiKey();
+    if (apiKey) {
       try {
-        const response = await fetch(`${API_ENDPOINTS.LINKS}`, {
-          method: "GET",
-          headers: getApiHeaders(result.apiKey),
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          // Check if data.links exists and has items
-          callback(data.links && data.links.length > 0);
-          return;
-        }
+        const links = await apiClient.getLinks(apiKey);
+        callback(links && links.length > 0);
+        return;
       } catch (error) {
         console.error("Error checking API for links:", error);
       }
@@ -330,7 +332,10 @@ function hasSavedLinks(callback) {
       // Check the savedLinks array directly
       callback(result.savedLinks && result.savedLinks.length > 0);
     });
-  });
+  } catch (error) {
+    console.error("Error in hasSavedLinks:", error);
+    callback(false);
+  }
 }
 
 function switchTab(tabName) {
@@ -376,24 +381,45 @@ function toggleActiveClass(selector, activeId, className) {
 
 function loadCurrentPageInfo() {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (tabs[0]) {
-      chrome.tabs.sendMessage(
-        tabs[0].id,
-        { action: "getPageInfo" },
-        handlePageInfoResponse
-      );
-    } else {
+    if (!tabs || tabs.length === 0) {
       console.error("No active tab found");
+      return;
     }
+    
+    const activeTab = tabs[0];
+    if (DEBUG) console.log('Active tab:', activeTab);
+    
+    // Check if we can inject content scripts into this tab
+    if (activeTab.url && (activeTab.url.startsWith('chrome://') || activeTab.url.startsWith('chrome-extension://'))) {
+      if (DEBUG) console.log('Cannot inject content script into chrome:// or extension pages');
+      // Just use the tab title
+      setInputValue("title", activeTab.title || '');
+      return;
+    }
+    
+    // Send message to content script
+    if (DEBUG) console.log('Sending getPageInfo message to tab:', activeTab.id);
+    chrome.tabs.sendMessage(
+      activeTab.id,
+      { action: "getPageInfo" },
+      handlePageInfoResponse
+    );
   });
 }
 
 function handlePageInfoResponse(response) {
   if (chrome.runtime.lastError) {
-    console.error(chrome.runtime.lastError);
+    console.error('Chrome runtime error:', chrome.runtime.lastError);
+    // Try to get basic info without content script
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        setInputValue("title", tabs[0].title || '');
+      }
+    });
     return;
   }
   if (response) {
+    console.log('Received page info:', response);
     setInputValue("title", response.title);
     setInputValue("description", response.description);
   } else {
@@ -437,9 +463,30 @@ function showMessage(message, type = "success") {
   }, 3000);
 }
 
-function updateTagFilter(tags) {
+async function updateTagFilter(tags) {
   const tagFilter = document.getElementById("tagFilter");
   tagFilter.innerHTML = '<option value="">Filter by tag</option>'; // Reset options
+  
+  // Try to get all user tags from the API
+  try {
+    const apiKey = await apiClient.getApiKey();
+    if (apiKey) {
+      const userTags = await apiClient.getUserTags(apiKey);
+      // Merge with tags from current links
+      const allTags = [...new Set([...tags, ...userTags])].sort();
+      for (const tag of allTags) {
+        const option = document.createElement("option");
+        option.value = tag;
+        option.textContent = tag;
+        tagFilter.appendChild(option);
+      }
+      return;
+    }
+  } catch (error) {
+    console.error('Error loading user tags:', error);
+  }
+  
+  // Fallback to just using tags from current links
   for (const tag of tags) {
     const option = document.createElement("option");
     option.value = tag;
@@ -525,12 +572,12 @@ function createLinkRow(link) {
     <td>
       <button class="menu-btn" data-link-id="${link.id}">⋮</button>
       <div class="menu-actions" style="display: none;">
-        <button class="action-btn edit-btn" data-action="edit">Edit</button>
-        <button class="action-btn delete-btn" data-action="delete">Delete</button>
-        <button class="action-btn view-btn" data-action="view">View URL</button>
-        <button class="action-btn copy-btn" data-action="copy">Copy URL</button>
-        <button class="action-btn open-btn" data-action="open">Open URL</button>
-        ${link.notes ? '<button class="action-btn notes-btn" data-action="notes">View Notes</button>' : ''}
+        <button class="action-btn edit-btn" data-action="edit" data-link-id="${link.id}">Edit</button>
+        <button class="action-btn delete-btn" data-action="delete" data-link-id="${link.id}">Delete</button>
+        <button class="action-btn view-btn" data-action="view" data-link-id="${link.id}">View URL</button>
+        <button class="action-btn copy-btn" data-action="copy" data-link-id="${link.id}">Copy URL</button>
+        <button class="action-btn open-btn" data-action="open" data-link-id="${link.id}">Open URL</button>
+        ${link.notes ? `<button class="action-btn notes-btn" data-action="notes" data-link-id="${link.id}">View Notes</button>` : ''}
       </div>
     </td>
   `;
@@ -542,24 +589,96 @@ function createLinkRow(link) {
   if (menuBtn && menuActions) {
     menuBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      
       // Close all other open menus first
-      for (const menu of document.querySelectorAll('.menu-actions')) {
-        if (menu !== menuActions) menu.style.display = 'none';
+      const allMenus = document.querySelectorAll('.menu-actions');
+      for (const menu of allMenus) {
+        if (menu !== menuActions) {
+          menu.style.display = 'none';
+        }
       }
-      menuActions.style.display = menuActions.style.display === 'none' ? 'block' : 'none';
+      
+      // Toggle current menu
+      const isOpen = menuActions.style.display === 'block';
+      menuActions.style.display = isOpen ? 'none' : 'block';
+      
+      // Add click-outside handler if menu is now open
+      if (!isOpen) {
+        const clickOutsideHandler = (event) => {
+          if (!menuActions.contains(event.target) && !menuBtn.contains(event.target)) {
+            menuActions.style.display = 'none';
+            document.removeEventListener('click', clickOutsideHandler);
+          }
+        };
+        
+        // Use setTimeout to avoid immediate trigger
+        setTimeout(() => {
+          document.addEventListener('click', clickOutsideHandler);
+        }, 0);
+      }
     });
 
-    // Close menu when clicking outside
-    const closeMenuHandler = (e) => {
-      if (e.target !== menuBtn) {
+    // Add action button handlers
+    const actionButtons = menuActions.querySelectorAll('.action-btn');
+    for (const btn of actionButtons) {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const action = btn.dataset.action;
+        const linkId = Number.parseInt(btn.dataset.linkId);
+        
+        // Close menu before handling action
         menuActions.style.display = 'none';
-        document.removeEventListener("click", closeMenuHandler);
-      }
-    };
-    document.addEventListener("click", closeMenuHandler);
+        
+        // Handle the action
+        handleLinkAction(action, linkId);
+      });
+    }
   }
 
   return row;
+}
+
+async function handleLinkAction(action, linkId) {
+  const link = currentLinks.find(l => l.id === linkId);
+  if (!link) {
+    console.error('Link not found:', linkId);
+    return;
+  }
+
+  switch (action) {
+    case 'edit':
+      editRSSItem(linkId);
+      break;
+    case 'delete':
+      await deleteLink(linkId);
+      break;
+    case 'view':
+      viewURL(link);
+      break;
+    case 'copy':
+      copyLinkURL(link);
+      break;
+    case 'open':
+      window.open(link.url, '_blank');
+      break;
+    case 'notes':
+      viewNotes(link);
+      break;
+  }
+}
+
+async function deleteLink(linkId) {
+  try {
+    const apiKey = await apiClient.getApiKey();
+    if (!apiKey) throw new Error('No API key found');
+
+    await apiClient.deleteLink(apiKey, linkId);
+    showMessage('Link deleted successfully');
+    await loadSavedLinks();
+  } catch (error) {
+    console.error('Error deleting link:', error);
+    showMessage(error.message || 'Failed to delete link', 'error');
+  }
 }
 
 // Helper function to get API key
@@ -653,37 +772,25 @@ function toggleCheckboxes(checked) {
 
 async function deleteSelectedLinks() {
   try {
-    const selectedLinks = getSelectedLinks();
-    if (!selectedLinks.length) return;
-
-    const apiKey = await getApiKey();
-    if (!apiKey) throw new Error('No API key found');
-
-    const response = await fetch(`${API_ENDPOINTS.LINKS}/batch`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey
-      },
-      body: JSON.stringify({ ids: selectedLinks.map(link => link.id) })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Failed to delete links: ${response.statusText}`);
+    const selectedIds = [];
+    const checkboxes = document.querySelectorAll(
+      '#savedLinksTable input[type="checkbox"]:checked'
+    );
+    
+    for (const checkbox of checkboxes) {
+      const linkId = Number.parseInt(checkbox.dataset.linkId);
+      if (linkId) selectedIds.push(linkId);
     }
 
-    // Wait for storage update before refreshing
-    await new Promise((resolve) => {
-      chrome.storage.local.get({ savedLinks: [] }, (result) => {
-        const updatedLinks = result.savedLinks.filter(link => 
-          !selectedLinks.some(selected => selected.id === link.id)
-        );
-        chrome.storage.local.set({ savedLinks: updatedLinks }, resolve);
-      });
-    });
+    if (selectedIds.length === 0) return;
 
-    await loadSavedLinks();
+    const apiKey = await apiClient.getApiKey();
+    if (!apiKey) throw new Error('No API key found');
+
+    await apiClient.bulkDeleteLinks(apiKey, selectedIds);
     showMessage('Links deleted successfully', 'success');
+    await loadSavedLinks();
+    toggleSelectMode(); // Exit select mode
   } catch (error) {
     console.error('Error deleting links:', error);
     showMessage('Failed to delete links. Please try again.', 'error');
@@ -736,95 +843,17 @@ window.changePage = (newPage) => {
   loadSavedLinks(currentPage);
 };
 
-function showMenu(button, linkId) {
-  const menuId = `menu-${linkId}`;
-  
-  // Clean up any existing menus
-  cleanupExistingMenus();
-  
-  const menu = createMenuElement(menuId, linkId);
-  positionMenu(menu, button);
-  
-  const cleanupFunctions = setupMenuEventListeners(menu, button, linkId);
-  
-  // Store cleanup functions on the menu element
-  menu.dataset.cleanupFunctions = JSON.stringify([...cleanupFunctions]);
-  
-  document.body.appendChild(menu);
-}
+// Removed unused menu popup functions - using inline menu approach instead
 
-function cleanupExistingMenus() {
-  const existingMenus = document.querySelectorAll('.menu-popup');
-  for (const menu of existingMenus) {
-    try {
-      const cleanupFunctions = JSON.parse(menu.dataset.cleanupFunctions || '[]');
-      for (const cleanup of cleanupFunctions) {
-        if (typeof cleanup === 'function') cleanup();
-      }
-    } catch (e) {
-      console.error('Error cleaning up menu:', e);
-    }
-    menu.remove();
-  };
-}
-
-function createMenuElement(menuId, linkId) {
-  const menu = document.createElement('div');
-  menu.id = menuId;
-  menu.className = 'menu-popup';
-  menu.innerHTML = `
-    <div class="menu-item" data-action="edit" data-link-id="${linkId}">Edit</div>
-    <div class="menu-item" data-action="delete" data-link-id="${linkId}">Delete</div>
-    <div class="menu-item" data-action="viewURL" data-link-id="${linkId}">View URL</div>
-    <div class="menu-item" data-action="copyURL" data-link-id="${linkId}">Copy URL</div>
-    <div class="menu-item" data-action="openURL" data-link-id="${linkId}">Open URL</div>
-    <div class="menu-item" data-action="viewNotes" data-link-id="${linkId}">View Notes</div>
-  `;
-  return menu;
-}
-
-function positionMenu(menu, button) {
-  const rect = button.getBoundingClientRect();
-  menu.style.position = 'absolute';
-  menu.style.left = `${rect.left}px`;
-  menu.style.top = `${rect.bottom}px`;
-}
-
-function setupMenuEventListeners(menu, button, linkId) {
-  const cleanupFunctions = new Set();
-  
-  // Setup menu item click handlers
-  for (const item of menu.querySelectorAll('.menu-item')) {
-    const handler = createMenuItemHandler(item, menu, linkId);
-    item.addEventListener('click', handler);
-    cleanupFunctions.add(() => item.removeEventListener('click', handler));
+function viewURL(link) {
+  if (!link) {
+    console.error('Link not found');
+    return;
   }
-  
-  // Setup click-outside handler
-  const closeHandler = createCloseHandler(menu, button, cleanupFunctions);
-  document.addEventListener('click', closeHandler);
-  cleanupFunctions.add(() => document.removeEventListener('click', closeHandler));
-  
-  return cleanupFunctions;
-}
 
-function viewURL(linkId, useIndex = false) {
-  chrome.storage.local.get({ savedLinks: [] }, (result) => {
-    const link = useIndex ? result.savedLinks[linkId] : result.savedLinks.find(l => l.id === linkId);
-    if (!link) {
-      console.error('Link not found');
-      return;
-    }
-
-    const overlay = document.createElement("div");
-    overlay.style.position = "fixed";
-    overlay.style.top = "0";
-    overlay.style.left = "0";
-    overlay.style.width = "100%";
-    overlay.style.height = "100%";
-    overlay.style.backgroundColor = "rgba(0,0,0,0.7)";
-    overlay.style.zIndex = "1001";
-    overlay.innerHTML = `
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.innerHTML = `
       <div style="background-color: white; margin: 10% auto; padding: 20px; width: 80%;">
         <h2>URL</h2>
         <p id="urlDisplay">${link.url}</p>
@@ -887,21 +916,7 @@ function viewURL(linkId, useIndex = false) {
 
           if (apiKey && link.id) {
             // Update in API first
-            const response = await fetch(`${API_ENDPOINTS.LINKS}/${link.id}`, {
-              method: "PUT",
-              headers: getApiHeaders(apiKey),
-              body: JSON.stringify(updatedLink),
-            });
-
-            if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(
-                errorData.error || "Failed to update URL on server"
-              );
-            }
-
-            // Get the updated link from the response
-            const updatedLinkFromServer = await response.json();
+            const updatedLinkFromServer = await apiClient.updateLink(apiKey, link.id, updatedLink);
             Object.assign(link, updatedLinkFromServer); // Merge server response with current link
           } else {
             // If no API key or ID, just update the local data
@@ -928,18 +943,20 @@ function viewURL(linkId, useIndex = false) {
     document.getElementById("closeOverlay").addEventListener("click", () => {
       document.body.removeChild(overlay);
     });
-  });
 }
 
 // First instance - for copying by ID
-function copyLinkURL(linkId) {
-  chrome.storage.local.get({ savedLinks: [] }, (result) => {
-    const link = result.savedLinks.find(l => l.id === linkId);
-    if (link) {
-      navigator.clipboard.writeText(link.url).then(() => {
-        showMessage("URL copied to clipboard!");
-      });
-    }
+function copyLinkURL(link) {
+  if (!link) {
+    console.error('Link not found');
+    return;
+  }
+  
+  navigator.clipboard.writeText(link.url).then(() => {
+    showMessage("URL copied to clipboard!");
+  }).catch(error => {
+    console.error('Failed to copy URL:', error);
+    showMessage("Failed to copy URL", "error");
   });
 }
 
@@ -954,13 +971,11 @@ function copyLinkURLByIndex(index) {
   });
 }
 
-function viewNotes(linkId) {
-  chrome.storage.local.get({ savedLinks: [] }, (result) => {
-    const link = result.savedLinks.find(l => l.id === linkId);
-    if (!link) {
-      console.error('Link not found');
-      return;
-    }
+function viewNotes(link) {
+  if (!link) {
+    console.error('Link not found');
+    return;
+  }
 
     const overlay = document.createElement("div");
     overlay.style.position = "fixed";
@@ -1013,16 +1028,14 @@ function viewNotes(linkId) {
     document.getElementById("closeOverlay").addEventListener("click", () => {
       document.body.removeChild(overlay);
     });
-  });
 }
 
 function editRSSItem(linkId) {
-  chrome.storage.local.get({ savedLinks: [] }, (result) => {
-    const link = result.savedLinks.find(l => l.id === linkId);
-    if (!link) {
-      console.error("Link not found for ID:", linkId);
-      return;
-    }
+  const link = currentLinks.find(l => l.id === linkId);
+  if (!link) {
+    console.error("Link not found for ID:", linkId);
+    return;
+  }
 
     const menuButton = document.querySelector(`button[data-link-id="${linkId}"]`);
     if (!menuButton) {
@@ -1060,17 +1073,24 @@ function editRSSItem(linkId) {
     cancelButton.textContent = "Cancel";
     cancelButton.classList.add("cancel-btn");
     cancelButton.onclick = () => {
-      titleCell.textContent = row.dataset.originalTitle;
-      descriptionCell.textContent = row.dataset.originalDescription;
-      tagCell.textContent = row.dataset.originalTags;
-      restoreMenuButton();
+      // Restore the original link data
+      const originalLink = currentLinks.find(l => l.id === linkId);
+      if (originalLink) {
+        restoreRow(row, originalLink);
+      } else {
+        // Fallback to text restoration if link not found
+        titleCell.textContent = row.dataset.originalTitle;
+        descriptionCell.textContent = row.dataset.originalDescription;
+        tagCell.textContent = row.dataset.originalTags;
+        restoreMenuButton();
+      }
     };
     menuButton.parentNode.insertBefore(cancelButton, menuButton);
 
     // Update menu button click handler
-    menuButton.onclick = () => {
-      saveRSSItemChanges(linkId, row);
-      restoreMenuButton();
+    menuButton.onclick = async () => {
+      await saveRSSItemChanges(linkId, row);
+      // restoreMenuButton is called within saveRSSItemChanges after successful save
     };
 
     function restoreMenuButton() {
@@ -1080,11 +1100,42 @@ function editRSSItem(linkId) {
       if (cancelButton.parentNode) {
         cancelButton.parentNode.removeChild(cancelButton);
       }
-      menuButton.onclick = (event) => {
-        showMenu(event.target, linkId);
-      };
+      // Remove the onclick handler - the original event listener will handle clicks
+      menuButton.onclick = null;
     }
-  });
+}
+
+function restoreRow(row, link) {
+  const titleCell = row.querySelector(".title-cell");
+  const descriptionCell = row.querySelector(".description-cell");
+  const tagCell = row.querySelector(".tag-cell");
+  
+  // Ensure link.url exists before using it
+  const url = link.url || '';
+  
+  titleCell.innerHTML = `
+    <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">
+      ${escapeHtml(link.title)}
+    </a>
+    ${url?.includes("12ft.io") ? '<span class="paywall-badge">12ft.io</span>' : ''}
+  `;
+  descriptionCell.textContent = link.description || '';
+  tagCell.textContent = (link.tags || []).join(', ');
+  
+  // Restore menu button
+  const menuButton = row.querySelector('.save-btn');
+  const cancelButton = row.querySelector('.cancel-btn');
+  
+  if (menuButton) {
+    menuButton.textContent = "⋮";
+    menuButton.classList.remove("save-btn");
+    menuButton.classList.add("menu-btn");
+    menuButton.onclick = null;
+  }
+  
+  if (cancelButton) {
+    cancelButton.remove();
+  }
 }
 
 async function saveRSSItemChanges(linkId, row) {
@@ -1106,32 +1157,43 @@ async function saveRSSItemChanges(linkId, row) {
   }
 
   try {
-    const [savedLinks, apiKey] = await Promise.all([
-      getSavedLinks(),
-      getApiKey()
-    ]);
+    const apiKey = await apiClient.getApiKey();
+    if (!apiKey) throw new Error('No API key found');
 
-    const link = savedLinks.find(l => l.id === linkId);
+    const link = currentLinks.find(l => l.id === linkId);
     if (!link) {
       throw new Error("Link not found");
     }
 
-    const updatedLink = {
-      ...link,
+    // Only send the fields that can be updated via PATCH
+    const updatePayload = {
       title: newTitle,
       description: newDescription || null,
       tags: newTags,
     };
 
-    const response = await updateLinkOnServer(linkId, updatedLink, apiKey);
-    await updateLocalStorage(response, savedLinks, linkId);
+    const savedLink = await apiClient.updateLink(apiKey, linkId, updatePayload);
+    
+    // Merge the response with the original link to preserve URL and other fields
+    const mergedLink = {
+      ...link,
+      ...savedLink,
+      url: link.url // Ensure URL is preserved from original link
+    };
+    
+    // Update local state
+    const linkIndex = currentLinks.findIndex(l => l.id === linkId);
+    if (linkIndex !== -1) {
+      currentLinks[linkIndex] = mergedLink;
+    }
     
     showMessage("Link updated successfully!");
-    await loadSavedLinks();
+    restoreRow(row, mergedLink);
     
   } catch (error) {
     console.error("Error updating link:", error);
     showMessage(error.message || "Failed to update link", "error");
+    // Don't restore the row on error - let user fix and try again
   }
 }
 
@@ -1143,25 +1205,7 @@ async function getSavedLinks() {
   });
 }
 
-async function updateLinkOnServer(linkId, updatedLink, apiKey) {
-  if (!apiKey) {
-    throw new Error('No API key found');
-  }
-
-  const response = await fetch(`${API_ENDPOINTS.LINKS}/${linkId}`, {
-    method: "PUT",
-    headers: getApiHeaders(apiKey),
-    body: JSON.stringify(updatedLink),
-  });
-
-  const data = await response.json();
-  
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to update link on server");
-  }
-
-  return data;
-}
+// updateLinkOnServer function removed - now using apiClient.updateLink
 
 async function updateLocalStorage(updatedLink, savedLinks, linkId) {
   const linkIndex = savedLinks.findIndex(l => l.id === linkId);
@@ -1252,21 +1296,7 @@ function editURL(linkId, useIndex = false) {
 
           if (apiKey && link.id) {
             // Update in API first
-            const response = await fetch(`${API_ENDPOINTS.LINKS}/${link.id}`, {
-              method: "PUT",
-              headers: getApiHeaders(apiKey),
-              body: JSON.stringify(updatedLink),
-            });
-
-            if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(
-                errorData.error || "Failed to update URL on server"
-              );
-            }
-
-            // Get the updated link from the response
-            const updatedLinkFromServer = await response.json();
+            const updatedLinkFromServer = await apiClient.updateLink(apiKey, link.id, updatedLink);
             Object.assign(link, updatedLinkFromServer); // Merge server response with current link
           } else {
             // If no API key or ID, just update the local data
@@ -1387,26 +1417,28 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Load RSS feed URL if API key exists
 async function loadRSSFeedURL() {
   try {
-    const apiKey = await getApiKey();
+    const apiKey = await apiClient.getApiKey();
     if (!apiKey) {
       document.getElementById("rssFeedSection").style.display = "none";
       return;
     }
 
-    const response = await fetch(API_ENDPOINTS.FEED_URL, {
-      method: "GET",
-      headers: getApiHeaders(apiKey),
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const rssFeedUrl = document.getElementById("rssFeedUrl");
-    if (rssFeedUrl) {
-      document.getElementById("rssFeedSection").style.display = "block";
-      rssFeedUrl.textContent = data.feedUrl;
+    const feedUrl = await apiClient.getRssFeedUrl(apiKey);
+    if (feedUrl) {
+      const rssFeedUrl = document.getElementById("rssFeedUrl");
+      if (rssFeedUrl) {
+        document.getElementById("rssFeedSection").style.display = "block";
+        rssFeedUrl.textContent = feedUrl;
+        
+        // Add click to copy functionality
+        rssFeedUrl.addEventListener('click', () => {
+          navigator.clipboard.writeText(feedUrl).then(() => {
+            showMessage("RSS feed URL copied to clipboard!");
+          });
+        });
+      }
+    } else {
+      document.getElementById("rssFeedSection").style.display = "none";
     }
   } catch (error) {
     console.error("Error loading RSS feed URL:", error);
@@ -1416,24 +1448,8 @@ async function loadRSSFeedURL() {
 
 // Update RSS feed when links change
 async function updateRSSFeed() {
-  const apiKey = await new Promise((resolve) => {
-    chrome.storage.sync.get(["apiKey"], (result) => resolve(result.apiKey));
-  });
-
-  if (!apiKey) return;
-
-  try {
-    const response = await fetch(API_ENDPOINTS.FEED_URL, {
-      method: "POST",
-      headers: getApiHeaders(apiKey),
-    });
-
-    if (!response.ok) {
-      console.error("Failed to update RSS feed");
-    }
-  } catch (error) {
-    console.error("Error updating RSS feed:", error);
-  }
+  // RSS feed updates automatically when links are changed via API
+  // No need to manually update
 }
 
 // Clear API key and related data
@@ -1463,8 +1479,8 @@ function updateSaveLinkButton() {
   const saveButton = document.getElementById("saveLink");
   const saveMessage = document.getElementById("saveMessage");
 
-  chrome.storage.sync.get(["apiKey"], (result) => {
-    if (result.apiKey) {
+  apiClient.getApiKey().then(apiKey => {
+    if (apiKey) {
       saveButton.disabled = false;
       saveButton.classList.remove("disabled");
       saveMessage.style.display = "none";
@@ -1606,21 +1622,8 @@ document.getElementById('dismissPremium').addEventListener('click', () => {
 
 // Add user preferences support
 async function loadUserPreferences() {
-  try {
-    const apiKey = await getApiKey();
-    if (!apiKey) return;
-
-    const response = await fetch(`${API_ENDPOINTS.PREFERENCES}`, {
-      headers: getApiHeaders(apiKey)
-    });
-
-    if (response.ok) {
-      const preferences = await response.json();
-      applyUserPreferences(preferences);
-    }
-  } catch (error) {
-    console.error('Error loading preferences:', error);
-  }
+  // Preferences loading can be implemented when the API supports it
+  // For now, use default preferences
 }
 
 function applyUserPreferences(preferences) {
@@ -1635,21 +1638,8 @@ function applyUserPreferences(preferences) {
 
 // Add subscription status check
 async function checkSubscriptionStatus() {
-  try {
-    const apiKey = await getApiKey();
-    if (!apiKey) return;
-
-    const response = await fetch(`${API_ENDPOINTS.SUBSCRIPTION}`, {
-      headers: getApiHeaders(apiKey)
-    });
-
-    if (response.ok) {
-      const subscriptionInfo = await response.json();
-      updateUIBasedOnSubscription(subscriptionInfo);
-    }
-  } catch (error) {
-    console.error('Error checking subscription:', error);
-  }
+  // Subscription status can be checked when the API supports it
+  // For now, assume free tier
 }
 
 function updateUIBasedOnSubscription(subscriptionInfo) {
@@ -1681,26 +1671,21 @@ function getApiHeaders(apiKey) {
 }
 
 async function saveLinkData(linkData) {
-  const apiKey = await getApiKey();
+  const apiKey = await apiClient.getApiKey();
   if (!apiKey) {
     throw new Error('No API key found');
   }
 
-  const endpoint = currentEditId 
-    ? `${API_ENDPOINTS.LINKS}/${currentEditId}`
-    : API_ENDPOINTS.LINKS;
-
-  const method = currentEditId ? 'PUT' : 'POST';
-
-  const response = await fetch(endpoint, {
-    method,
-    headers: getApiHeaders(apiKey),
-    body: JSON.stringify(linkData)
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.message || 'Failed to save link');
+  if (currentEditId) {
+    const updatedLink = await apiClient.updateLink(apiKey, currentEditId, linkData);
+    // Update local state
+    const linkIndex = currentLinks.findIndex(l => l.id === currentEditId);
+    if (linkIndex !== -1) {
+      currentLinks[linkIndex] = updatedLink;
+    }
+  } else {
+    const newLink = await apiClient.createLink(apiKey, linkData);
+    currentLinks.unshift(newLink); // Add to beginning of list
   }
 
   await loadSavedLinks();
@@ -1731,36 +1716,62 @@ async function validateApiKey() {
     return;
   }
 
-  try {
-    // First validate the API key by fetching the feed URL
-    const feedResponse = await fetch(API_ENDPOINTS.FEED_URL, {
-      headers: {
-        'X-API-Key': apiKey
-      }
-    });
+  if (DEBUG) console.log('Validating API key:', apiKey);
 
-    if (!feedResponse.ok) {
+  try {
+    // Validate the API key
+    const result = await apiClient.validateApiKey(apiKey);
+    
+    if (DEBUG) console.log('Validation result:', result);
+    
+    if (result.valid) {
+      // Save the API key
+      await apiClient.setApiKey(apiKey);
+
+      // Update UI elements
+      statusElement.textContent = 'API key validated successfully!';
+      statusElement.style.color = 'green';
+      apiKeyEntry.style.display = 'none';
+      editApiKey.style.display = 'block';
+      
+      // Refresh links display and RSS feed URL
+      await Promise.all([
+        loadSavedLinks(),
+        loadRSSFeedURL()
+      ]);
+      updateSaveLinkButton();
+    } else {
       throw new Error('Invalid API key');
     }
 
-    // If successful, save the API key
-    await setApiKey(apiKey);
-
-    // Update UI elements
-    statusElement.textContent = 'API key validated successfully!';
-    statusElement.style.color = 'green';
-    apiKeyEntry.style.display = 'none';
-    editApiKey.style.display = 'block';
-    
-    // Refresh links display
-    await loadSavedLinks();
-    updateSaveLinkButton();
-
   } catch (error) {
     console.error('Error validating API key:', error);
-    statusElement.textContent = 'Invalid API key';
+    console.error('Error details:', {
+      message: error.message,
+      status: error.status,
+      code: error.code,
+      stack: error.stack
+    });
+    
+    let errorMessage = 'Error validating API key. Please try again.';
+    
+    if (error instanceof ApiError) {
+      if (error.status === 401) {
+        errorMessage = 'Invalid API key';
+      } else if (error.status === 500) {
+        errorMessage = 'Server error. Please try again later.';
+      } else if (error.status === 0) {
+        errorMessage = 'Network error. Please check your connection.';
+      } else {
+        errorMessage = error.message || errorMessage;
+      }
+    } else if (error.message.includes('fetch')) {
+      errorMessage = 'Network error. Please check your connection.';
+    }
+    
+    statusElement.textContent = errorMessage;
     statusElement.style.color = 'red';
-    await setApiKey(''); // Clear invalid API key
+    await apiClient.setApiKey(''); // Clear invalid API key
   }
 }
 

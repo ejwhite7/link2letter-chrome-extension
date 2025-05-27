@@ -1,5 +1,8 @@
+// Import CONFIG from config.js
+import { CONFIG } from './config.js';
+
 // Add missing constant at the top with other constants
-const API_BASE_URL = CONFIG.API_BASE_URL; // Replace with actual API URL
+const API_BASE_URL = CONFIG.API_BASE_URL;
 
 // Initialize saved links array
 const savedLinks = [];
@@ -168,10 +171,12 @@ function updateRSSFeed() {
 
 // Update API endpoints
 const API_ENDPOINTS = {
-  generateApiKey: '/api/generate-api-key',
-  getFeedUrl: '/api/validate-api-key',
-  getSubscription: '/api/subscription',
-  links: '/api/links'
+  validateApiKey: '/api/validate-api-key',
+  links: '/api/links',
+  extensionLinks: '/api/extension/links',
+  extensionUser: '/api/extension/user',
+  extensionTags: '/api/extension/tags',
+  extensionRssToken: '/api/extension/rss-token'
 };
 
 // Update link creation function
@@ -208,13 +213,13 @@ async function createLink(linkData) {
   }
 }
 
-// Add function to check subscription status
-async function checkSubscriptionStatus() {
+// Get user info function
+async function getUserInfo() {
   try {
     const apiKey = await getApiKey();
     if (!apiKey) throw new Error('No API key found');
 
-    const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.getSubscription}`, {
+    const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.extensionUser}`, {
       headers: {
         'X-API-Key': apiKey
       }
@@ -229,49 +234,51 @@ async function checkSubscriptionStatus() {
     return data;
   } catch (error) {
     if (error instanceof TypeError) {
-      console.error('Network error checking subscription:', error);
+      console.error('Network error getting user info:', error);
       throw new Error('Network error - please check your connection');
     }
-    console.error('Error checking subscription:', error);
+    console.error('Error getting user info:', error);
     throw error;
   }
 }
 
-// Update API key generation function
-async function generateNewApiKey() {
+// Validate API key function
+async function validateApiKey(apiKey) {
   try {
-    const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.generateApiKey}`, {
-      method: 'POST'
+    const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.validateApiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ apiKey })
     });
 
     const data = await response.json();
     
     if (!response.ok) {
-      throw new Error(data.error || 'Failed to generate API key');
+      throw new Error(data.error || 'Invalid API key');
     }
 
-    await storeApiKey(data.apiKey);
-    return data.apiKey;
+    return data.valid === true;
   } catch (error) {
-    console.error('Error generating API key:', error);
+    console.error('Error validating API key:', error);
     throw error;
   }
 }
 
-// Update API key generation function
+// Update link function
 async function updateLink(linkData) {
   try {
     const apiKey = await getApiKey();
     if (!apiKey) throw new Error('No API key found');
 
     const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.links}/${linkData.id}`, {
-      method: 'PUT',
+      method: 'PATCH',
       headers: {
         'Content-Type': 'application/json',
         'X-API-Key': apiKey
       },
       body: JSON.stringify({
-        url: linkData.url,
         title: linkData.title,
         description: linkData.description || null,
         notes: linkData.notes || null,
@@ -298,7 +305,7 @@ async function getLinks() {
     const apiKey = await getApiKey();
     if (!apiKey) throw new Error('No API key found');
 
-    const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.links}`, {
+    const response = await fetch(`${API_BASE_URL}${API_ENDPOINTS.extensionLinks}`, {
       headers: {
         'X-API-Key': apiKey
       }
@@ -310,10 +317,13 @@ async function getLinks() {
       throw new Error(data.error || 'Failed to fetch links');
     }
 
+    // Extract links array from response
+    const links = data.links || [];
+    
     // Store the fetched links in local storage
-    chrome.storage.local.set({ savedLinks: data });
+    chrome.storage.local.set({ savedLinks: links });
 
-    return data;
+    return links;
   } catch (error) {
     console.error('Error fetching links:', error);
     throw error;

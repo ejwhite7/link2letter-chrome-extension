@@ -55,8 +55,10 @@ body {
 .main-content {
   flex: 1;
   overflow-y: auto;
+  overflow-x: visible;
   min-height: 0;
   padding-right: 8px;
+  position: relative;
 }
 
 /* Scrollbar Styling */
@@ -244,6 +246,7 @@ td {
   font-size: 14px;
   color: #334155;
   vertical-align: middle;
+  position: relative;
 }
 
 tr:last-child td {
@@ -469,53 +472,106 @@ a:hover {
   color: #064e3b;
 }
 
+/* Menu Actions - Updated for proper positioning */
 .menu-actions {
   position: absolute;
   background: white;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-  z-index: 1000;
-  right: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 10000;
+  min-width: 150px;
+  right: 10px;
+  top: 100%;
+  margin-top: 4px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
+/* Ensure table cells can contain absolute positioned elements */
+#savedLinksTable td:last-child {
+  position: relative;
+  overflow: visible;
+}
+
+/* Ensure table doesn't clip menus */
+#savedLinksTable {
+  overflow: visible;
+}
+
+/* Menu button styling */
+.menu-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: #64748b;
+  transition: all 0.2s ease;
+}
+
+.menu-btn:hover {
+  background-color: #f0f0f0;
+  color: var(--primary-color);
+  transform: none;
+  box-shadow: none;
+}
+
+/* Action button styling */
 .action-btn {
   display: block;
   width: 100%;
-  padding: 8px 16px;
+  padding: 10px 16px;
   text-align: left;
   border: none;
   background: none;
   cursor: pointer;
   font-size: 14px;
   color: #475569;
+  transition: all 0.2s ease;
+  white-space: nowrap;
 }
 
 .action-btn:hover {
   background-color: #f8fafc;
   color: var(--primary-color);
+  transform: none;
+  box-shadow: none;
 }
 
-.overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
+/* Edit mode styles */
+.edit-title,
+.edit-description,
+.edit-tags {
   width: 100%;
-  height: 100%;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  z-index: 2000;
+  padding: 6px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  font-size: 14px;
 }
 
-.overlay-content {
-  background: white;
-  padding: 24px;
-  border-radius: 8px;
-  max-width: 80%;
-  max-height: 80%;
-  overflow: auto;
+.edit-description {
+  min-height: 60px;
+  resize: vertical;
+}
+
+.save-btn,
+.cancel-btn {
+  padding: 6px 12px;
+  font-size: 14px;
+  margin-right: 4px;
+}
+
+.cancel-btn {
+  background: #f3f4f6;
+  color: #374151;
+}
+
+.cancel-btn:hover {
+  background: #e5e7eb;
+  transform: none;
+  box-shadow: none;
 }
 
 /* Premium Tab Styles */
@@ -632,38 +688,25 @@ a:hover {
   font-weight: 600;
 }
 
-.menu-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  font-size: 18px;
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-
-.menu-btn:hover {
-  background-color: #f0f0f0;
-}
-
-.menu-actions {
-  position: absolute;
-  background: white;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-  z-index: 1000;
-}
-
-.action-btn {
-  display: block;
+/* Overlay styles */
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
   width: 100%;
-  padding: 8px 16px;
-  text-align: left;
-  border: none;
-  background: none;
-  cursor: pointer;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 20000;
 }
 
-.action-btn:hover {
-  background-color: #f0f0f0;
+.overlay-content {
+  background: white;
+  padding: 24px;
+  border-radius: 8px;
+  max-width: 80%;
+  max-height: 80%;
+  overflow: auto;
 }

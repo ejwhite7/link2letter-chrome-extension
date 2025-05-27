@@ -169,7 +169,7 @@ function updateRSSFeed() {
 // Update API endpoints
 const API_ENDPOINTS = {
   generateApiKey: '/api/generate-api-key',
-  getFeedUrl: '/api/feed-url',
+  getFeedUrl: '/api/validate-api-key',
   getSubscription: '/api/subscription',
   links: '/api/links'
 };

@@ -5,7 +5,7 @@ const DEBUG = false;
 
 const API_ENDPOINTS = {
   API_KEY: `${CONFIG.API_BASE_URL}/api/generate-api-key`,
-  FEED_URL: `${CONFIG.API_BASE_URL}/api/feed-url`,
+  FEED_URL: `${CONFIG.API_BASE_URL}/api/validate-api-key`,
   SUBSCRIPTION: `${CONFIG.API_BASE_URL}/api/subscription`,
   LINKS: `${CONFIG.API_BASE_URL}/api/links`
 };
